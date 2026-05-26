@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Undercover Word Party Game</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: sans-serif; max-width: 700px; margin: 40px auto; padding: 20px; background: #1a1a2e; color: #eee; }
+    h1 { color: #e94560; text-align: center; }
+    h2 { color: #a8b2d8; }
+    input, select, button { padding: 10px 16px; margin: 6px; border-radius: 8px; border: none; font-size: 15px; }
+    button { background: #e94560; color: white; cursor: pointer; transition: background 0.2s; }
+    button:hover { background: #c73652; }
+    button:disabled { background: #555; cursor: not-allowed; }
+    .card { background: #16213e; border-radius: 12px; padding: 20px; margin: 16px 0; }
+    .player-btn { background: #0f3460; margin: 5px; }
+    .player-btn:hover { background: #1a4a80; }
+    .eliminated { opacity: 0.4; text-decoration: line-through; }
+    #status { font-size: 1.2em; font-weight: bold; color: #ffd700; text-align: center; margin: 10px 0; }
+    .error-msg { color: #e94560; font-size: 13px; margin: 6px 0 0 6px; min-height: 20px; }
+    .tag { display: inline-flex; align-items: center; gap: 6px; margin: 4px; padding: 5px 12px; background: #0f3460; border-radius: 6px; }
+    .tag .remove { cursor: pointer; color: #e94560; font-weight: bold; font-size: 16px; }
+    .config-row { display: flex; align-items: center; gap: 10px; margin: 12px 0; }
+    .config-row label { min-width: 180px; color: #a8b2d8; }
+    select { background: #0f3460; color: #eee; cursor: pointer; }
+    .reveal-card { background: #0f3460; border-radius: 8px; padding: 14px; margin: 8px 0; cursor: pointer; transition: background 0.2s; }
+    .reveal-card:hover { background: #1a4a80; }
+    .win-box { text-align: center; padding: 20px 10px; }
+    .win-box .emoji { font-size: 3em; }
+    .win-box h2 { font-size: 1.8em; color: #ffd700; margin: 10px 0; }
+    .win-box .words { color: #e94560; margin: 10px 0 20px; }
+    hr { border-color: #0f3460; margin: 20px 0; }
+  </style>
+</head>
+<body>
+  <h1>🕵️ Undercover</h1>
+
+  <!-- ── SECTION 1: Add Players ── -->
+  <div class="card" id="section-setup">
+    <h2>Step 1 — Add Players</h2>
+    <input id="player-input" placeholder="Enter player name"
+           onkeydown="if(event.key==='Enter') addPlayer()"/>
+    <button onclick="addPlayer()">Add</button>
+    <div class="error-msg" id="setup-error"></div>
+    <div id="player-list" style="margin-top:12px"></div>
+    <br/>
+    <button id="next-btn" onclick="goToConfig()" style="display:none">
+      Next: Configure Roles →
+    </button>
+  </div>
+
+  <!-- ── SECTION 2: Configure Roles ── -->
+  <div class="card" id="section-config" style="display:none">
+    <h2>Step 2 — Configure Roles</h2>
+    <p style="color:#a8b2d8">Total players: <strong id="player-count">0</strong></p>
+    <div class="config-row">
+      <label>🕵️ Undercover count:</label>
+      <select id="undercover-count" onchange="updatePreview()"></select>
+    </div>
+    <div class="config-row">
+      <label>❓ Mr. White count:</label>
+      <select id="mrwhite-count" onchange="updatePreview()"></select>
+    </div>
+    <div class="error-msg" id="config-error"></div>
+    <p id="role-preview" style="color:#a8b2d8; margin-top:8px;"></p>
+    <br/>
+    <button onclick="goBackToSetup()" style="background:#0f3460">← Back</button>
+    <button id="start-btn" onclick="startGame()">🎮 Start Game!</button>
+  </div>
+
+  <!-- ── SECTION 3: Game ── -->
+  <div id="section-game" style="display:none">
+
+    <!-- Win screen -->
+    <div class="card win-box" id="win-screen" style="display:none">
+      <div class="emoji" id="win-emoji"></div>
+      <h2 id="win-title"></h2>
+      <p id="win-subtitle" style="color:#a8b2d8"></p>
+      <p class="words" id="win-words"></p>
+      <button onclick="playAgain()">🔄 Play Again (same players)</button>
+      <button onclick="resetAll()" style="background:#0f3460; margin-left:8px">🏠 New Game</button>
+    </div>
+
+    <!-- Active game -->
+    <div id="active-game">
+      <div class="card">
+        <div id="status"></div>
+        <h2 style="margin-bottom:8px">Tap your name to see your secret word</h2>
+        <div id="players-display"></div>
+      </div>
+      <div class="card">
+        <h2>🗳️ Vote to eliminate</h2>
+        <div id="vote-buttons"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // ── State ──────────────────────────────────────────────
+    let players = [];          // array of name strings
+    let currentGame = null;    // game object from API
+    let savedUndercover = 1;
+    let savedMrWhite = 0;
+
+    // ── Section helpers ────────────────────────────────────
+    function showOnly(id) {
+      ['section-setup','section-config','section-game'].forEach(s => {
+        document.getElementById(s).style.display = s === id ? 'block' : 'none';
+      });
+    }
+
+    // ── Step 1: Add Players ────────────────────────────────
+    function addPlayer() {
+      const input = document.getElementById('player-input');
+      const error = document.getElementById('setup-error');
+      const raw   = input.value.trim();
+      error.textContent = '';
+
+      if (!raw) {
+        error.textContent = '⚠️ Please type a name first!';
+        return;
+      }
+
+      // ── Duplicate check ──
+      const normalised = raw.toLowerCase();
+      for (let i = 0; i < players.length; i++) {
+        if (players[i].toLowerCase() === normalised) {
+          error.textContent = `⚠️ "${raw}" is already added!`;
+          input.value = '';
+          input.focus();
+          return;          // stop here — do NOT push
+        }
+      }
+
+      players.push(raw);
+      input.value = '';
+      input.focus();
+      renderPlayerList();
+    }
+
+    function removePlayer(i) {
+      players.splice(i, 1);
+      renderPlayerList();
+    }
+
+    function renderPlayerList() {
+      const list = document.getElementById('player-list');
+      list.innerHTML = players.map((name, i) =>
+        `<span class="tag">
+          ${name}
+          <span class="remove" onclick="removePlayer(${i})">✕</span>
+        </span>`
+      ).join('');
+      document.getElementById('next-btn').style.display =
+        players.length >= 3 ? 'inline-block' : 'none';
+    }
+
+    // ── Step 2: Configure Roles ────────────────────────────
+    function goToConfig() {
+      document.getElementById('setup-error').textContent = '';
+      document.getElementById('player-count').textContent = players.length;
+      buildDropdowns();
+      showOnly('section-config');
+    }
+
+    function goBackToSetup() {
+      showOnly('section-setup');
+    }
+
+    function buildDropdowns() {
+      const total = players.length;
+      const uSel  = document.getElementById('undercover-count');
+      const mSel  = document.getElementById('mrwhite-count');
+
+      uSel.innerHTML = '';
+      for (let i = 1; i <= total - 2; i++) {
+        const o = document.createElement('option');
+        o.value = i; o.textContent = i;
+        if (i === savedUndercover) o.selected = true;
+        uSel.appendChild(o);
+      }
+
+      mSel.innerHTML = '';
+      for (let i = 0; i <= total - 2; i++) {
+        const o = document.createElement('option');
+        o.value = i; o.textContent = i === 0 ? '0 (none)' : i;
+        if (i === savedMrWhite) o.selected = true;
+        mSel.appendChild(o);
+      }
+
+      updatePreview();
+    }
+
+    function updatePreview() {
+      const total = players.length;
+      const u = parseInt(document.getElementById('undercover-count').value);
+      const m = parseInt(document.getElementById('mrwhite-count').value);
+      const c = total - u - m;
+      const error = document.getElementById('config-error');
+      const btn   = document.getElementById('start-btn');
+
+      if (c < 1) {
+        error.textContent = '⚠️ Need at least 1 Civilian. Lower Undercover or Mr. White count.';
+        btn.disabled = true;
+      } else {
+        error.textContent = '';
+        btn.disabled = false;
+        document.getElementById('role-preview').textContent =
+          `👥 ${c} Civilian(s)   🕵️ ${u} Undercover   ❓ ${m} Mr. White`;
+      }
+    }
+
+    // ── Step 3: Game ───────────────────────────────────────
+    async function startGame() {
+      const u = parseInt(document.getElementById('undercover-count').value);
+      const m = parseInt(document.getElementById('mrwhite-count').value);
+      savedUndercover = u;
+      savedMrWhite    = m;
+
+      const res = await fetch('/api/game/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ playerNames: players, undercoverCount: u, mrWhiteCount: m })
+      });
+
+      if (!res.ok) {
+        document.getElementById('config-error').textContent = '⚠️ Server error. Try again!';
+        return;
+      }
+
+      currentGame = await res.json();
+      console.log('Game created:', currentGame);   // handy for debugging
+      showOnly('section-game');
+      renderGame();
+    }
+
+    function renderGame() {
+      const isOver = currentGame.gameState !== 'Playing';
+
+      document.getElementById('win-screen').style.display   = isOver ? 'block' : 'none';
+      document.getElementById('active-game').style.display  = isOver ? 'none'  : 'block';
+
+      if (isOver) {
+        const info = {
+          CiviliansWin:    { e:'🎉', t:'Civilians Win!',     s:'All infiltrators eliminated.' },
+          InfiltratorsWin: { e:'😈', t:'Infiltrators Win!',  s:'They outlasted the civilians.' },
+          MrWhiteWins:     { e:'🃏', t:'Mr. White Wins!',    s:'He guessed the civilian word!' }
+        }[currentGame.gameState] || { e:'🏁', t: currentGame.gameState, s:'' };
+
+        document.getElementById('win-emoji').textContent    = info.e;
+        document.getElementById('win-title').textContent    = info.t;
+        document.getElementById('win-subtitle').textContent = info.s;
+        document.getElementById('win-words').innerHTML =
+          `Civilian word: <strong>${currentGame.civilianWord}</strong> &nbsp;|&nbsp;
+           Undercover word: <strong>${currentGame.undercoverWord}</strong>`;
+        return;
+      }
+
+      // Status
+      document.getElementById('status').textContent =
+        '🎮 Round ' + currentGame.round;
+
+      // Player reveal cards — currentGame.players is the camelCase array
+      document.getElementById('players-display').innerHTML =
+        currentGame.players.map(p =>
+          p.isEliminated
+            ? `<div class="card eliminated"><strong>${p.name}</strong> ❌ eliminated</div>`
+            : `<div class="reveal-card" onclick="revealWord('${p.name}','${p.word ?? ''}','${p.role}')">
+                 <strong>${p.name}</strong> — tap to see your secret word
+               </div>`
+        ).join('');
+
+      // Vote buttons — only alive players
+      const alive = currentGame.players.filter(p => !p.isEliminated);
+      document.getElementById('vote-buttons').innerHTML =
+        alive.map(p =>
+          `<button class="player-btn" onclick="eliminate('${p.id}')">
+             Vote out ${p.name}
+           </button>`
+        ).join('');
+    }
+
+    function revealWord(name, word, role) {
+      const msg = role === 'MrWhite'
+        ? `👤 ${name}\n\nYou are MR. WHITE — you have NO word!\nBlend in. If voted out, guess the civilians' word to win.`
+        : `👤 ${name}\n\nYour secret word is:\n\n"${word}"\n\nMemorize it then close this!`;
+      alert(msg);
+    }
+
+    async function eliminate(playerId) {
+      const res = await fetch(`/api/game/${currentGame.id}/eliminate/${playerId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      if (!res.ok) { alert('Vote failed — check console.'); return; }
+      currentGame = await res.json();
+
+      // If the eliminated player is Mr. White and game still going, prompt guess
+      const eliminated = currentGame.players.find(p => p.id === playerId);
+      if (eliminated?.role === 'MrWhite' && currentGame.gameState === 'Playing') {
+        const guess = prompt(`❓ ${eliminated.name} is Mr. White!\nGuess the civilians' word:`);
+        if (guess) {
+          const gr = await fetch(`/api/game/${currentGame.id}/mrwhite-guess`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(guess)
+          });
+          const result = await gr.json();
+          if (result.correct) {
+            currentGame.gameState = 'MrWhiteWins';
+          } else {
+            alert('❌ Wrong guess! Mr. White is out.');
+          }
+        }
+      }
+
+      renderGame();
+    }
+
+    // ── Play Again / Reset ─────────────────────────────────
+    async function playAgain() {
+      const res = await fetch('/api/game/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          playerNames: players,
+          undercoverCount: savedUndercover,
+          mrWhiteCount: savedMrWhite
+        })
+      });
+      currentGame = await res.json();
+      renderGame();
+    }
+
+    function resetAll() {
+      players = [];
+      currentGame = null;
+      renderPlayerList();
+      showOnly('section-setup');
+    }
+  </script>
+</body>
+</html>
